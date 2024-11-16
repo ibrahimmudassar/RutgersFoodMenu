@@ -68,4 +68,4 @@ for response in tqdm(grequests.imap(urls, size=100), total=len(urls)):
             offerings.append(offering)
 
 df = pd.DataFrame(offerings)
-df.to_csv("offerings.csv", index=False)
+df.to_json("offerings.json", orient="records")
