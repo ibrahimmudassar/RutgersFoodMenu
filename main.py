@@ -1,10 +1,12 @@
+import json
 from datetime import datetime, timedelta
-from pprint import pprint
+from urllib.parse import parse_qsl, urlsplit
 
 import grequests
 import pandas as pd
 from bs4 import BeautifulSoup
 from tqdm import tqdm
+import re
 
 urls = []
 urls_metadata = {}
@@ -23,9 +25,9 @@ for single_date in (datetime.today() + timedelta(n) for n in range(6)):
     for meal in meals:
         for locationName in locations:
 
-            url = f"https://menuportal23.dining.rutgers.edu/foodpronet/pickmenu.aspx?locationNum=04&locationName={locationName}l&dtdate={single_date.strftime('%-m/%-d/%Y')}&activeMeal={meal}&sName=Rutgers+University+Dining"
+            url = f"https://menuportal23.dining.rutgers.edu/foodpronet/pickmenu.aspx?locationNum=04&locationName={locationName}&dtdate={single_date.strftime('%m/%d/%Y')}&activeMeal={meal}&sName=Rutgers+University+Dining"
             urls_metadata[url] = {}
-            urls_metadata[url]["date"] = single_date.strftime("%-m/%-d/%Y")
+            urls_metadata[url]["date"] = single_date.strftime("%m/%d/%Y")
             urls_metadata[url]["location"] = " ".join(locationName.split("+"))
             urls_metadata[url]["meal"] = meal
             urls.append(grequests.get(url))
@@ -67,5 +69,41 @@ for response in tqdm(grequests.imap(urls, size=100), total=len(urls)):
 
             offerings.append(offering)
 
+# from all these links, we need to get the calories of all unique foods
+foods = []
+for o in offerings:
+    parsed_url = dict(parse_qsl(urlsplit(o["nutrition_info"]).query))
+    foods.append(parsed_url["RecNumAndPort"])
+
+urls = []
+for f in sorted(list(set(foods))):
+    urls.append(
+        f"https://menuportal23.dining.rutgers.edu/foodpronet/label.aspx?RecNumAndPort={f}"
+    )
+
+calories = []
+for response in tqdm(
+    grequests.imap([grequests.get(u) for u in urls], size=100), total=len(urls)
+):
+    try:
+        soup = BeautifulSoup(response.text, "html.parser")
+        calories.append(
+            {
+                "item": soup.find_all("h2")[2].text,
+                "calories": int(
+                    soup.find(string=re.compile("Calories\xa0")).text.replace(
+                        "Calories\xa0", ""
+                    )
+                ),
+            }
+        )
+    except AttributeError:
+        print(url)
+
+calories_df = pd.DataFrame(calories)
 df = pd.DataFrame(offerings)
-df.to_json("offerings.json", orient="records")
+df = df.merge(calories_df, how="left", on="item")
+
+parsed = json.loads(df.to_json(orient="records"))
+with open("offerings.json", "w") as f:
+    f.write(json.dumps(parsed, indent=4, sort_keys=True))
